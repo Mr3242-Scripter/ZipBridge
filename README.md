@@ -23,18 +23,18 @@ Use a token with repository access and **Contents: Read and write** permission. 
 ## Upload details
 The archive-size threshold does not reject a ZIP. Files are uploaded one at a time; the next upload starts only after GitHub confirms the previous request. Every successful file upload creates its own commit. GitHub's Contents API has a 100 MiB per-file limit, and repository branch protection or token permissions may prevent writes.
 
-## Nightly unsigned IPA releases
+## Manually triggered unsigned IPA releases
 
-The GitHub Actions workflow at `.github/workflows/nightly-ipa-release.yml` runs every day at **03:00 UTC** and can also be started manually from **Actions → Nightly IPA Release → Run workflow**.
+The GitHub Actions workflow at `.github/workflows/nightly-ipa-release.yml` runs **only when you manually start it** from **Actions → Nightly IPA Release → Run workflow**. It has no scheduled trigger.
 
-It builds the app for physical iOS devices **without an Apple signing certificate or provisioning profile**, packages the app as an unsigned IPA, calculates its SHA-256 checksum, and uploads both files to a GitHub prerelease.
+It builds the app for physical iOS devices without an Apple signing certificate or provisioning profile, packages the app as an unsigned IPA, calculates its SHA-256 checksum, and uploads both files to a GitHub prerelease.
 
 ### Release detection and uploads
 
 - The workflow uses one release tag per UTC day: `nightly-YYYYMMDD`.
-- Before publishing, it checks whether that day's release already exists.
+- When manually run, it checks whether that day's release already exists.
 - If it does not exist, the workflow creates a new prerelease.
-- If it already exists (for example, when the workflow is rerun), the workflow reuses it and replaces the previous IPA/checksum assets.
+- If it already exists, the workflow reuses it and replaces the previous IPA/checksum assets.
 - The release contains `ZipBridge-unsigned-<build number>.ipa` and `SHA256SUMS.txt`.
 
 No Apple Developer account, certificate, provisioning profile, or signing secrets are required. The workflow uses the repository's built-in GitHub Actions token to create and upload release assets.
