@@ -49,7 +49,7 @@ struct ContentView: View {
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.zip], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
-                if let url = urls.first { model.prepareArchive(at: url) }
+                if let url = urls.first { Task { await model.prepareArchive(at: url) } }
             case .failure(let error):
                 model.errorMessage = error.localizedDescription
             }
@@ -284,7 +284,7 @@ struct ContentView: View {
 
     private var footer: some View {
         Text("ZipBridge • Private by design • iOS 16+")
-            .font(.caption2).foregroundColor(.tertiary).padding(.top, 2)
+            .font(.caption2).foregroundColor(Color(uiColor: .tertiaryLabel)).padding(.top, 2)
     }
 
     private func sectionTitle(_ title: String, icon: String) -> some View {
