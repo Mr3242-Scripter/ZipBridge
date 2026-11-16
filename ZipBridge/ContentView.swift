@@ -179,14 +179,25 @@ struct ContentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
+
             Toggle(isOn: $archiveProtectionEnabled) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Enable protection").font(.subheadline.weight(.semibold))
-                    Text("Limit expanded archive size to 2 GiB.")
-                        .font(.caption).foregroundColor(.secondary)
+                    Text(archiveProtectionEnabled
+                        ? "2 GiB size limit + strict path safety (recommended)"
+                        : "Size limit and most path checks disabled")
+                        .font(.caption)
+                        .foregroundColor(archiveProtectionEnabled ? .secondary : .orange)
                 }
             }
             .tint(.blue)
+
+            if !archiveProtectionEnabled {
+                Label("Protection is off. Only hard sandbox confinement remains. Use only with trusted archives.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if model.archiveSizeWarning {
                 Label("Archive exceeds the 25 MiB advisory threshold. ZipBridge will continue and check files individually.", systemImage: "info.circle.fill")
