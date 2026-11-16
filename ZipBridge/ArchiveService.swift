@@ -36,7 +36,7 @@ enum ArchiveServiceError: LocalizedError {
 enum ArchiveService {
     static let maximumExpandedBytes: Int64 = 2 * 1024 * 1024 * 1024
 
-    static func inspectAndExtract(_ archiveURL: URL) throws -> ExtractedArchive {
+    static func inspectAndExtract(_ archiveURL: URL, protectionEnabled: Bool = true) throws -> ExtractedArchive {
         let accessed = archiveURL.startAccessingSecurityScopedResource()
         defer { if accessed { archiveURL.stopAccessingSecurityScopedResource() } }
 
@@ -85,8 +85,14 @@ enum ArchiveService {
                     throw ArchiveServiceError.unsafeEntry("Duplicate path: \(normalized)")
                 }
                 let size = Int64(entry.uncompressedSize)
-                guard size >= 0, expanded <= maximumExpandedBytes - size else {
+                guard size >= 0 else {
                     throw ArchiveServiceError.expansionLimit
+                }
+                if protectionEnabled {
+                    guard size <= maximumExpandedBytes,
+                          expanded <= maximumExpandedBytes - size else {
+                        throw ArchiveServiceError.expansionLimit
+                    }
                 }
                 expanded += size
 
