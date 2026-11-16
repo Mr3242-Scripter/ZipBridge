@@ -6,6 +6,7 @@ struct ContentView: View {
     @StateObject private var model = UploadViewModel()
     @State private var showingImporter = false
     @AppStorage("archiveProtectionEnabled") private var archiveProtectionEnabled = true
+    @AppStorage("fastModeEnabled") private var fastModeEnabled = false
 
     private var success: Bool {
         model.verificationFinished &&
@@ -221,6 +222,17 @@ struct ContentView: View {
                     .foregroundColor(.red)
             }
 
+            Toggle(isOn: $fastModeEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Enable Fast Mode")
+                    Text(fastModeEnabled
+                          ? "Batch uploads & verify near 25 MiB"
+                          : "One file at a time")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
             if model.archiveSizeWarning {
                 Label("Archive exceeds the 25 MiB advisory threshold.", systemImage: "info.circle.fill")
                     .font(.caption)
@@ -248,7 +260,7 @@ struct ContentView: View {
                 .foregroundColor(.secondary)
 
             Button {
-                Task { await model.uploadAndVerify() }
+                Task { await model.uploadAndVerify(fastMode: fastModeEnabled) }
             } label: {
                 if model.isBusy {
                     HStack {
@@ -266,7 +278,9 @@ struct ContentView: View {
         } header: {
             Text("Upload")
         } footer: {
-            Text("Each file is committed separately. Files over 100 MiB are skipped by GitHub’s Contents API.")
+            Text(fastModeEnabled
+                  ? "Fast Mode groups files near 25 MiB and runs several uploads/verifies in parallel. Files over 100 MiB are still skipped."
+                  : "Each file is committed separately. Files over 100 MiB are skipped by GitHub’s Contents API.")
         }
     }
 
