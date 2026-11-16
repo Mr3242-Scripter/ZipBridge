@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var model = UploadViewModel()
     @State private var showingImporter = false
+    @AppStorage("archiveProtectionEnabled") private var archiveProtectionEnabled = true
 
     private var success: Bool {
         model.verificationFinished && model.verificationIssues.isEmpty &&
@@ -49,7 +50,7 @@ struct ContentView: View {
         .navigationViewStyle(.stack)
         .background {
             ZipDocumentPicker(isPresented: $showingImporter) { url in
-                Task { await model.prepareArchive(at: url) }
+                Task { await model.prepareArchive(at: url, protectionEnabled: archiveProtectionEnabled) }
             } onError: { error in
                 model.errorMessage = error.localizedDescription
             }
@@ -178,6 +179,15 @@ struct ContentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
+            Toggle(isOn: $archiveProtectionEnabled) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Enable protection").font(.subheadline.weight(.semibold))
+                    Text("Limit expanded archive size to 2 GiB.")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .tint(.blue)
+
             if model.archiveSizeWarning {
                 Label("Archive exceeds the 25 MiB advisory threshold. ZipBridge will continue and check files individually.", systemImage: "info.circle.fill")
                     .font(.caption).foregroundColor(.orange)
