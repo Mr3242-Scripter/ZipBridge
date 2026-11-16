@@ -81,7 +81,8 @@ final class UploadViewModel: ObservableObject {
 
     let advisoryArchiveThreshold: Int64 = 25 * 1024 * 1024
     let maximumGitHubFileSize: Int64 = 100 * 1024 * 1024
-    let fastModeBatchTarget: Int64 = 24 * 1024 * 1024
+    /// Hard ceiling: batch total must stay strictly under 25,000,000 bytes (25 MB).
+    let fastModeBatchLimit: Int64 = 25_000_000
 
     var client: GitHubClient? {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -170,12 +171,16 @@ final class UploadViewModel: ObservableObject {
         }
     }
 
-    private func makeBatches(from files: [ArchiveFile], targetBytes: Int64) -> [[ArchiveFile]] {
+    /// Packs files so every batch is strictly under `limitBytes`.
+    /// A single file at or above the limit still forms its own batch
+    /// (GitHub allows up to 100 MiB per Contents API upload).
+    private func makeBatches(from files: [ArchiveFile], limitBytes: Int64) -> [[ArchiveFile]] {
         var batches: [[ArchiveFile]] = []
         var current: [ArchiveFile] = []
         var currentSize: Int64 = 0
+
         for file in files {
-            if file.byteCount >= targetBytes {
+            if file.byteCount >= limitBytes {
                 if !current.isEmpty {
                     batches.append(current)
                     current = []
@@ -184,7 +189,9 @@ final class UploadViewModel: ObservableObject {
                 batches.append([file])
                 continue
             }
-            if !current.isEmpty && currentSize + file.byteCount > targetBytes {
+
+            // Adding this file would meet or exceed the hard limit → start a new batch.
+            if !current.isEmpty && currentSize + file.byteCount >= limitBytes {
                 batches.append(current)
                 current = [file]
                 currentSize = file.byteCount
@@ -254,7 +261,7 @@ final class UploadViewModel: ObservableObject {
         }
 
         if fastMode {
-            append("Fast Mode on — each ~25 MiB batch uploads fully in parallel, then verifies in parallel.")
+            append("Fast Mode on — each under-25 MB batch uploads fully in parallel, then verifies in parallel.")
             await uploadFast(eligible, client: client, owner: owner, repo: repo, branch: selectedBranch.name)
         } else {
             await uploadSequential(eligible, client: client, owner: owner, repo: repo, branch: selectedBranch.name)
@@ -317,7 +324,7 @@ final class UploadViewModel: ObservableObject {
         repo: String,
         branch: String
     ) async {
-        let batches = makeBatches(from: eligible, targetBytes: fastModeBatchTarget)
+        let batches = makeBatches(from: eligible, limitBytes: fastModeBatchLimit)
         var finishedThisRun = 0
         let total = max(eligible.count, 1)
 
@@ -484,7 +491,7 @@ final class UploadViewModel: ObservableObject {
         repo: String,
         branch: String
     ) async {
-        let batches = makeBatches(from: files, targetBytes: fastModeBatchTarget)
+        let batches = makeBatches(from: files, limitBytes: fastModeBatchLimit)
 
         for (batchIndex, batch) in batches.enumerated() {
             if Task.isCancelled { return }
