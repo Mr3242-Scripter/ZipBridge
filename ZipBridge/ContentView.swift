@@ -22,9 +22,9 @@ struct ContentView: View {
                     HStack(spacing: 14) {
                         Image(systemName: "archivebox.fill")
                             .font(.system(size: 28, weight: .semibold))
-                            .foregroundColor(.white)
+                            .foregroundStyle(.white)
                             .frame(width: 52, height: 52)
-                            .background(Color.blue)
+                            .background(.blue)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 2) {
@@ -268,13 +268,17 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await model.loadRepositories() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    if model.isBusy {
+                        ProgressView()
+                    } else {
+                        Button {
+                            Task { await model.loadRepositories() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(model.token.isEmpty)
+                        .accessibilityLabel("Refresh repositories")
                     }
-                    .disabled(model.isBusy || model.token.isEmpty)
-                    .accessibilityLabel("Refresh repositories")
                 }
             }
         }
@@ -287,15 +291,19 @@ struct ContentView: View {
             }
             .frame(width: 0, height: 0)
         }
-        .alert("ZipBridge", isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
-        )) {
+        // Native iOS 16 alert
+        .alert(
+            "Unable to Continue",
+            isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { if !$0 { model.errorMessage = nil } }
+            )
+        ) {
             Button("OK", role: .cancel) {
                 model.errorMessage = nil
             }
         } message: {
-            Text(model.errorMessage ?? "")
+            Text(model.errorMessage ?? "An unexpected error occurred.")
         }
         .task {
             if !model.token.isEmpty && model.repositories.isEmpty {
