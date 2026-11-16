@@ -137,7 +137,7 @@ final class GitHubClient {
         let route = "/repos/\(pathComponent(owner))/\(pathComponent(repo))/contents/\(encodedPath(path))?ref=\(pathComponent(branch))"
         let json = try await request(path: route)
         let object = try JSONSerialization.jsonObject(with: json) as? [String: Any]
-        if let encoded = object?["content"] as? String,
+        if let encoded = object?["content"] as? String, !encoded.isEmpty,
            let decoded = Data(base64Encoded: encoded.replacingOccurrences(of: "\n", with: "")) {
             return decoded
         }
