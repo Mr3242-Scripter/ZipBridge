@@ -36,6 +36,9 @@ enum ArchiveServiceError: LocalizedError {
 enum ArchiveService {
     static let maximumExpandedBytes: Int64 = 2 * 1024 * 1024 * 1024
 
+    /// When `protectionEnabled` is `false` the 2 GiB expanded-size limit is skipped
+    /// and some path checks are relaxed. The final confinement to the temporary
+    /// extraction directory is always enforced so files cannot escape the app sandbox.
     static func inspectAndExtract(_ archiveURL: URL, protectionEnabled: Bool = true) throws -> ExtractedArchive {
         let accessed = archiveURL.startAccessingSecurityScopedResource()
         defer { if accessed { archiveURL.stopAccessingSecurityScopedResource() } }
@@ -55,39 +58,81 @@ enum ArchiveService {
 
             for entry in archive {
                 let raw = entry.path
-                guard !raw.isEmpty,
-                      !raw.hasPrefix("/"),
-                      !raw.contains("\\"),
-                      !raw.contains("\0") else {
-                    throw ArchiveServiceError.unsafeEntry(raw)
+
+                // Basic emptiness / null-byte checks always apply
+                guard !raw.isEmpty, !raw.contains("\0") else {
+                    if protectionEnabled {
+                        throw ArchiveServiceError.unsafeEntry(raw)
+                    }
+                    continue
                 }
-                // Ignore harmless current-directory components (for example "./folder/file").
-                // Parent traversal remains forbidden; all output is confined to the fresh extraction root.
+
+                // Path safety (absolute paths, backslashes, parent traversal, drive letters)
+                if protectionEnabled {
+                    guard !raw.hasPrefix("/"),
+                          !raw.contains("\\"),
+                          !raw.contains("..") else {
+                        throw ArchiveServiceError.unsafeEntry(raw)
+                    }
+                }
+
+                // Normalize components
                 let rawComponents = raw.split(separator: "/", omittingEmptySubsequences: true)
-                guard !rawComponents.isEmpty,
-                      !rawComponents.contains(".."),
-                      !rawComponents[0].contains(":") else {
-                    throw ArchiveServiceError.unsafeEntry(raw)
+                guard !rawComponents.isEmpty else {
+                    if protectionEnabled {
+                        throw ArchiveServiceError.unsafeEntry(raw)
+                    }
+                    continue
                 }
+
+                // When protection is on, reject parent traversal and drive letters
+                if protectionEnabled {
+                    guard !rawComponents.contains(".."),
+                          !rawComponents[0].contains(":") else {
+                        throw ArchiveServiceError.unsafeEntry(raw)
+                    }
+                }
+
                 let components = rawComponents.filter { $0 != "." }
                 guard !components.isEmpty else {
-                    throw ArchiveServiceError.unsafeEntry(raw)
+                    if protectionEnabled {
+                        throw ArchiveServiceError.unsafeEntry(raw)
+                    }
+                    continue
                 }
-                guard entry.type != .symlink else {
-                    throw ArchiveServiceError.unsupportedEntry(raw)
+
+                // Symlinks and non-file/dir entries
+                if protectionEnabled {
+                    guard entry.type != .symlink else {
+                        throw ArchiveServiceError.unsupportedEntry(raw)
+                    }
+                    guard entry.type == .file || entry.type == .directory else {
+                        throw ArchiveServiceError.unsupportedEntry(raw)
+                    }
+                } else {
+                    // Still skip pure directories and try to extract only regular files
+                    if entry.type == .directory { continue }
+                    if entry.type == .symlink { continue } // still skip symlinks for safety
                 }
-                guard entry.type == .file || entry.type == .directory else {
-                    throw ArchiveServiceError.unsupportedEntry(raw)
-                }
+
                 let normalized = components.joined(separator: "/")
                 if entry.type == .directory { continue }
-                guard seen.insert(normalized).inserted else {
-                    throw ArchiveServiceError.unsafeEntry("Duplicate path: \(normalized)")
+
+                if protectionEnabled {
+                    guard seen.insert(normalized).inserted else {
+                        throw ArchiveServiceError.unsafeEntry("Duplicate path: \(normalized)")
+                    }
+                } else {
+                    // Allow duplicates when unprotected (last one wins)
+                    _ = seen.insert(normalized)
                 }
+
                 let size = Int64(entry.uncompressedSize)
                 guard size >= 0 else {
                     throw ArchiveServiceError.expansionLimit
                 }
+
+                // Size limit only when protection is enabled
                 if protectionEnabled {
                     guard size <= maximumExpandedBytes,
                           expanded <= maximumExpandedBytes - size else {
@@ -99,9 +144,12 @@ enum ArchiveService {
                 let destination = root.appendingPathComponent(normalized)
                 let standardized = destination.standardizedFileURL.path
                 let rootPrefix = root.standardizedFileURL.path + "/"
+
+                // HARD confinement – always enforced, even when protection is off
                 guard standardized.hasPrefix(rootPrefix) else {
                     throw ArchiveServiceError.unsafeEntry(raw)
                 }
+
                 try FileManager.default.createDirectory(
                     at: destination.deletingLastPathComponent(),
                     withIntermediateDirectories: true
