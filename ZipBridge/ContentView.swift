@@ -226,7 +226,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Enable Fast Mode")
                     Text(fastModeEnabled
-                          ? "Batch uploads & verify near 25 MiB"
+                          ? "Full ~25 MiB batches in parallel"
                           : "One file at a time")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -279,7 +279,7 @@ struct ContentView: View {
             Text("Upload")
         } footer: {
             Text(fastModeEnabled
-                  ? "Fast Mode groups files near 25 MiB and runs several uploads/verifies in parallel. Files over 100 MiB are still skipped."
+                  ? "Fast Mode groups files near 25 MiB and uploads/verifies every file in that batch at once. Files over 100 MiB are still skipped."
                   : "Each file is committed separately. Files over 100 MiB are skipped by GitHub’s Contents API.")
         }
     }
