@@ -74,29 +74,30 @@ struct ContentView: View {
             HStack(spacing: 14) {
                 Image(systemName: "archivebox.fill")
                     .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundColor(.white)
                     .frame(width: 52, height: 52)
-                    .background(.blue, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(Color.blue)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("ZIP to GitHub")
                         .font(.headline)
                     Text("Extract · Upload · Verify")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
 
-                Spacer(minLength: 0)
+                Spacer()
 
                 Image(systemName: "checkmark.shield.fill")
                     .font(.title2)
-                    .foregroundStyle(.green)
+                    .foregroundColor(.green)
             }
             .padding(.vertical, 2)
 
             Text("Upload archive contents as individual commits, then compare every remote file against the original.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
         }
     }
 
@@ -153,7 +154,7 @@ struct ContentView: View {
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
             }
             .disabled(model.repositories.isEmpty || model.isBusy)
@@ -173,7 +174,7 @@ struct ContentView: View {
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
             }
             .disabled(model.branches.isEmpty || model.isBusy)
@@ -187,22 +188,19 @@ struct ContentView: View {
             Button {
                 showingImporter = true
             } label: {
-                HStack(spacing: 12) {
+                HStack {
                     Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(.blue)
-                        .font(.title3)
-
+                        .foregroundColor(.blue)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(model.archive?.sourceName ?? "Choose ZIP File")
-                            .foregroundStyle(.primary)
+                            .foregroundColor(.primary)
                         Text(model.archive == nil
                               ? "Browse the Files app"
                               : "\(model.totalFiles) files · \(ByteCountFormatter.string(fromByteCount: model.archive?.archiveBytes ?? 0, countStyle: .file))")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
-
-                    Spacer(minLength: 0)
+                    Spacer()
                 }
             }
 
@@ -213,28 +211,20 @@ struct ContentView: View {
                           ? "2 GiB limit + strict path safety"
                           : "All protections disabled")
                         .font(.caption)
-                        .foregroundStyle(archiveProtectionEnabled ? .secondary : .red)
+                        .foregroundColor(archiveProtectionEnabled ? .secondary : .red)
                 }
             }
 
             if !archiveProtectionEnabled {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                    Text("Every protection is off, including path confinement. Use only with fully trusted archives.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+                Label("Every protection is off, including path confinement. Use only with fully trusted archives.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.red)
             }
 
             if model.archiveSizeWarning {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "info.circle.fill")
-                        .foregroundStyle(.orange)
-                    Text("Archive exceeds the 25 MiB advisory threshold.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
+                Label("Archive exceeds the 25 MiB advisory threshold.", systemImage: "info.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
             }
         } header: {
             Text("Archive")
@@ -247,7 +237,7 @@ struct ContentView: View {
                 Text("Progress")
                 Spacer()
                 Text("\(model.uploadedPaths.count)/\(model.totalFiles)")
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .monospacedDigit()
             }
 
@@ -255,7 +245,7 @@ struct ContentView: View {
 
             Text(model.currentAction)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
 
             Button {
                 Task { await model.uploadAndVerify() }
@@ -285,7 +275,7 @@ struct ContentView: View {
             ForEach(model.archive?.files ?? []) { file in
                 HStack(spacing: 12) {
                     Image(systemName: statusIcon(for: file.relativePath))
-                        .foregroundStyle(statusColor(for: file.relativePath))
+                        .foregroundColor(statusColor(for: file.relativePath))
                         .frame(width: 22)
 
                     VStack(alignment: .leading, spacing: 1) {
@@ -294,19 +284,19 @@ struct ContentView: View {
                             .lineLimit(2)
                         Text(ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file))
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
 
-                    Spacer(minLength: 8)
+                    Spacer()
 
                     if model.uploadedPaths.contains(file.relativePath) {
                         Text("Sent")
                             .font(.caption)
-                            .foregroundStyle(.green)
+                            .foregroundColor(.green)
                     } else if model.failedPaths[file.relativePath] != nil {
                         Text("Issue")
                             .font(.caption)
-                            .foregroundStyle(.orange)
+                            .foregroundColor(.orange)
                     }
                 }
             }
@@ -321,12 +311,12 @@ struct ContentView: View {
                 Text(success ? "All files match" : "Issues found")
                 Spacer()
                 Image(systemName: success ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(success ? .green : .orange)
+                    .foregroundColor(success ? .green : .orange)
             }
 
             Text("\(model.verifiedCount) of \(model.totalFiles) files verified with SHA-256.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
 
             ForEach(model.verificationIssues) { issue in
                 VStack(alignment: .leading, spacing: 2) {
@@ -334,7 +324,7 @@ struct ContentView: View {
                         .font(.subheadline.weight(.medium))
                     Text(issue.detail)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
                 .padding(.vertical, 2)
             }
@@ -348,7 +338,7 @@ struct ContentView: View {
             ForEach(Array(model.logs.suffix(12)), id: \.self) { line in
                 Text(line)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
         } header: {
             Text("Activity")
