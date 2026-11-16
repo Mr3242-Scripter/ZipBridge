@@ -139,13 +139,15 @@ final class UploadViewModel: ObservableObject {
     private var ownerName: String { selectedRepository?.full_name.split(separator: "/").first.map(String.init) ?? "" }
     private var repoName: String { selectedRepository?.full_name.split(separator: "/").last.map(String.init) ?? "" }
 
-    func prepareArchive(at url: URL) {
+    func prepareArchive(at url: URL) async {
         isBusy = true
         currentAction = "Inspecting ZIP archive…"
         defer { isBusy = false }
         do {
+            let extracted = try await Task.detached(priority: .userInitiated) {
+                try ArchiveService.inspectAndExtract(url)
+            }.value
             if let old = archive { try? FileManager.default.removeItem(at: old.extractionDirectory) }
-            let extracted = try ArchiveService.inspectAndExtract(url)
             archive = extracted
             uploadedPaths = []
             failedPaths = [:]
@@ -164,7 +166,6 @@ final class UploadViewModel: ObservableObject {
             currentAction = "Archive inspection failed"
         }
     }
-
     func uploadAndVerify() async {
         guard let archive, let client, let selectedRepository, let selectedBranch else {
             errorMessage = "Choose a ZIP, repository, branch, and valid token."
