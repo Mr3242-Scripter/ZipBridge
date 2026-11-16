@@ -35,12 +35,14 @@ enum GitHubClientError: LocalizedError {
     case invalidResponse
     case http(Int, String)
     case invalidRepository
+    case timedOut
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse: return "GitHub returned an invalid response."
         case .http(let code, let message): return "GitHub API error (\(code)): \(message)"
         case .invalidRepository: return "Choose a valid owner/repository destination."
+        case .timedOut: return "The request timed out. Try again, or use smaller batches."
         }
     }
 }
@@ -49,26 +51,42 @@ final class GitHubClient {
     private let token: String
     private let base = URL(string: "https://api.github.com")!
     private let decoder = JSONDecoder()
+    private let session: URLSession
 
-    init(token: String) { self.token = token }
+    init(token: String) {
+        self.token = token
+        let config = URLSessionConfiguration.default
+        // Large base64 payloads + background can need long windows.
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 600
+        config.waitsForConnectivity = true
+        config.httpMaximumConnectionsPerHost = 6
+        self.session = URLSession(configuration: config)
+    }
 
     private func request(path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         guard let url = URL(string: path, relativeTo: base) else { throw GitHubClientError.invalidResponse }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
+        request.timeoutInterval = body == nil ? 60 : 180
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         request.setValue("ZipBridge-iOS", forHTTPHeaderField: "User-Agent")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw GitHubClientError.invalidResponse }
-        if !(200...299).contains(http.statusCode) {
-            let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            throw GitHubClientError.http(http.statusCode, payload?["message"] as? String ?? "Request failed.")
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw GitHubClientError.invalidResponse }
+            if !(200...299).contains(http.statusCode) {
+                let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                throw GitHubClientError.http(http.statusCode, payload?["message"] as? String ?? "Request failed.")
+            }
+            return data
+        } catch let urlError as URLError where urlError.code == .timedOut {
+            throw GitHubClientError.timedOut
         }
-        return data
     }
 
     private func pathComponent(_ value: String) -> String {
@@ -115,10 +133,10 @@ final class GitHubClient {
         }
     }
 
-    /// Single-file upload via Contents API, with retries on conflict (409/400).
+    /// Single-file upload via Contents API, with retries on conflict / timeout.
     func upload(data: Data, owner: String, repo: String, path: String, branch: String, message: String) async throws {
         var lastError: Error?
-        for attempt in 1...4 {
+        for attempt in 1...5 {
             do {
                 let sha = try await existingSHA(owner: owner, repo: repo, path: path, branch: branch)
                 var payload: [String: Any] = [
@@ -133,8 +151,14 @@ final class GitHubClient {
                 return
             } catch GitHubClientError.http(let code, let message) where code == 409 || code == 400 || code == 422 {
                 lastError = GitHubClientError.http(code, message)
-                if attempt < 4 {
-                    try await Task.sleep(nanoseconds: UInt64(attempt) * 250_000_000)
+                if attempt < 5 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt) * 400_000_000)
+                    continue
+                }
+            } catch GitHubClientError.timedOut {
+                lastError = GitHubClientError.timedOut
+                if attempt < 5 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
                     continue
                 }
             } catch {
@@ -154,7 +178,8 @@ final class GitHubClient {
         let object: Object
     }
 
-    /// Creates one commit containing all provided files (parallel blob upload).
+    /// Creates one commit containing all provided files.
+    /// Blobs are uploaded with limited concurrency to avoid timeouts and 400s.
     func uploadBatch(
         files: [(path: String, data: Data)],
         owner: String,
@@ -172,28 +197,25 @@ final class GitHubClient {
         let refData = try await request(path: "/repos/\(o)/\(r)/git/ref/heads/\(refName)")
         let headSHA = try decoder.decode(RefResponse.self, from: refData).object.sha
 
-        // 2. Create blobs in parallel
+        // 2. Create blobs (max 4 at a time)
         var blobSHAs: [(path: String, sha: String)] = []
-        try await withThrowingTaskGroup(of: (String, String).self) { group in
-            for file in files {
-                group.addTask {
-                    let payload: [String: Any] = [
-                        "content": file.data.base64EncodedString(),
-                        "encoding": "base64"
-                    ]
-                    let body = try JSONSerialization.data(withJSONObject: payload)
-                    let data = try await self.request(
-                        path: "/repos/\(o)/\(r)/git/blobs",
-                        method: "POST",
-                        body: body
-                    )
-                    let sha = try self.decoder.decode(BlobResponse.self, from: data).sha
-                    return (file.path, sha)
+        blobSHAs.reserveCapacity(files.count)
+        let maxConcurrent = 4
+        var index = 0
+        while index < files.count {
+            let end = min(index + maxConcurrent, files.count)
+            let slice = Array(files[index..<end])
+            try await withThrowingTaskGroup(of: (String, String).self) { group in
+                for file in slice {
+                    group.addTask {
+                        try await self.createBlob(owner: o, repo: r, data: file.data, path: file.path)
+                    }
+                }
+                for try await item in group {
+                    blobSHAs.append(item)
                 }
             }
-            for try await item in group {
-                blobSHAs.append(item)
-            }
+            index = end
         }
 
         // 3. Create tree from base + new blobs
@@ -224,17 +246,54 @@ final class GitHubClient {
         let commitSHA = try decoder.decode(CommitResponse.self, from: commitData).sha
 
         // 5. Move branch ref (retry once on conflict)
+        try await moveRef(owner: o, repo: r, refName: refName, commitSHA: commitSHA, treeItems: treeItems, message: message)
+    }
+
+    private func createBlob(owner: String, repo: String, data: Data, path: String) async throws -> (String, String) {
+        var lastError: Error?
+        for attempt in 1...4 {
+            do {
+                let payload: [String: Any] = [
+                    "content": data.base64EncodedString(),
+                    "encoding": "base64"
+                ]
+                let body = try JSONSerialization.data(withJSONObject: payload)
+                let response = try await request(
+                    path: "/repos/\(owner)/\(repo)/git/blobs",
+                    method: "POST",
+                    body: body
+                )
+                let sha = try decoder.decode(BlobResponse.self, from: response).sha
+                return (path, sha)
+            } catch GitHubClientError.timedOut {
+                lastError = GitHubClientError.timedOut
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
+            } catch GitHubClientError.http(let code, let message) where code == 400 || code == 502 || code == 503 {
+                lastError = GitHubClientError.http(code, message)
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 400_000_000)
+            }
+        }
+        throw lastError ?? GitHubClientError.timedOut
+    }
+
+    private func moveRef(
+        owner: String,
+        repo: String,
+        refName: String,
+        commitSHA: String,
+        treeItems: [[String: Any]],
+        message: String
+    ) async throws {
         let refPayload: [String: Any] = ["sha": commitSHA, "force": false]
         let refBody = try JSONSerialization.data(withJSONObject: refPayload)
         do {
-            _ = try await request(path: "/repos/\(o)/\(r)/git/refs/heads/\(refName)", method: "PATCH", body: refBody)
+            _ = try await request(path: "/repos/\(owner)/\(repo)/git/refs/heads/\(refName)", method: "PATCH", body: refBody)
         } catch GitHubClientError.http(let code, _) where code == 422 || code == 409 || code == 400 {
-            // Branch moved — retry once from fresh tip
-            let refData2 = try await request(path: "/repos/\(o)/\(r)/git/ref/heads/\(refName)")
+            let refData2 = try await request(path: "/repos/\(owner)/\(repo)/git/ref/heads/\(refName)")
             let head2 = try decoder.decode(RefResponse.self, from: refData2).object.sha
             let treePayload2: [String: Any] = ["base_tree": head2, "tree": treeItems]
             let treeBody2 = try JSONSerialization.data(withJSONObject: treePayload2)
-            let treeData2 = try await request(path: "/repos/\(o)/\(r)/git/trees", method: "POST", body: treeBody2)
+            let treeData2 = try await request(path: "/repos/\(owner)/\(repo)/git/trees", method: "POST", body: treeBody2)
             let treeSHA2 = try decoder.decode(TreeResponse.self, from: treeData2).sha
             let commitPayload2: [String: Any] = [
                 "message": message,
@@ -242,11 +301,11 @@ final class GitHubClient {
                 "parents": [head2]
             ]
             let commitBody2 = try JSONSerialization.data(withJSONObject: commitPayload2)
-            let commitData2 = try await request(path: "/repos/\(o)/\(r)/git/commits", method: "POST", body: commitBody2)
+            let commitData2 = try await request(path: "/repos/\(owner)/\(repo)/git/commits", method: "POST", body: commitBody2)
             let commitSHA2 = try decoder.decode(CommitResponse.self, from: commitData2).sha
             let refPayload2: [String: Any] = ["sha": commitSHA2, "force": false]
             let refBody2 = try JSONSerialization.data(withJSONObject: refPayload2)
-            _ = try await request(path: "/repos/\(o)/\(r)/git/refs/heads/\(refName)", method: "PATCH", body: refBody2)
+            _ = try await request(path: "/repos/\(owner)/\(repo)/git/refs/heads/\(refName)", method: "PATCH", body: refBody2)
         }
     }
 
@@ -267,12 +326,17 @@ final class GitHubClient {
             throw GitHubClientError.invalidResponse
         }
         var rawRequest = URLRequest(url: url)
+        rawRequest.timeoutInterval = 180
         rawRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         rawRequest.setValue("ZipBridge-iOS", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: rawRequest)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw GitHubClientError.invalidResponse
+        do {
+            let (data, response) = try await session.data(for: rawRequest)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                throw GitHubClientError.invalidResponse
+            }
+            return data
+        } catch let urlError as URLError where urlError.code == .timedOut {
+            throw GitHubClientError.timedOut
         }
-        return data
     }
 }
