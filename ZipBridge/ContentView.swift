@@ -75,25 +75,46 @@ struct ContentView: View {
 
                 // Destination
                 Section {
-                    Picker("Repository", selection: Binding(
-                        get: { model.selectedRepository },
-                        set: { newValue in
-                            if let newValue {
-                                Task { await model.chooseRepository(newValue) }
+                    Menu {
+                        if model.repositories.isEmpty {
+                            Button("No repositories loaded") {}
+                                .disabled(true)
+                        }
+                        ForEach(model.repositories) { repo in
+                            Button {
+                                Task { await model.chooseRepository(repo) }
+                            } label: {
+                                if model.selectedRepository?.id == repo.id {
+                                    Label(repo.full_name, systemImage: "checkmark")
+                                } else {
+                                    Text(repo.full_name)
+                                }
                             }
                         }
-                    )) {
-                        Text("Choose Repository").tag(Optional<GitHubRepository>.none)
-                        ForEach(model.repositories) { repo in
-                            Text(repo.full_name).tag(Optional(repo))
+                    } label: {
+                        HStack {
+                            Text(model.selectedRepository?.full_name ?? "Choose Repository")
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .disabled(model.repositories.isEmpty || model.isBusy)
 
-                    Picker("Branch", selection: $model.selectedBranch) {
-                        Text("Choose Branch").tag(Optional<GitHubBranch>.none)
+                    Menu {
                         ForEach(model.branches) { branch in
-                            Text(branch.name).tag(Optional(branch))
+                            Button(branch.name) {
+                                model.selectedBranch = branch
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(model.selectedBranch?.name ?? "Choose Branch")
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .disabled(model.branches.isEmpty || model.isBusy)
@@ -291,7 +312,6 @@ struct ContentView: View {
             }
             .frame(width: 0, height: 0)
         }
-        // Native iOS 16 alert
         .alert(
             "Unable to Continue",
             isPresented: Binding(
