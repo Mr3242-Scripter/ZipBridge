@@ -139,13 +139,13 @@ final class UploadViewModel: ObservableObject {
     private var ownerName: String { selectedRepository?.full_name.split(separator: "/").first.map(String.init) ?? "" }
     private var repoName: String { selectedRepository?.full_name.split(separator: "/").last.map(String.init) ?? "" }
 
-    func prepareArchive(at url: URL) async {
+    func prepareArchive(at url: URL, protectionEnabled: Bool = true) async {
         isBusy = true
         currentAction = "Inspecting ZIP archive…"
         defer { isBusy = false }
         do {
             let extracted = try await Task.detached(priority: .userInitiated) {
-                try ArchiveService.inspectAndExtract(url)
+                try ArchiveService.inspectAndExtract(url, protectionEnabled: protectionEnabled)
             }.value
             if let old = archive { try? FileManager.default.removeItem(at: old.extractionDirectory) }
             archive = extracted
