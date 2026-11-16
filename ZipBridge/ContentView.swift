@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -46,13 +47,13 @@ struct ContentView: View {
             }
         }
         .navigationViewStyle(.stack)
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.zip], allowsMultipleSelection: false) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first { Task { await model.prepareArchive(at: url) } }
-            case .failure(let error):
+        .background {
+            ZipDocumentPicker(isPresented: $showingImporter) { url in
+                Task { await model.prepareArchive(at: url) }
+            } onError: { error in
                 model.errorMessage = error.localizedDescription
             }
+            .frame(width: 0, height: 0)
         }
         .alert("ZipBridge", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -303,5 +304,60 @@ struct ContentView: View {
         }
         .padding(12).background(Color(uiColor: .tertiarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 11)).contentShape(Rectangle())
+    }
+}
+
+// Mirrors SideStore's native ZIP import: UIDocumentPickerViewController,
+// filtered to ZIP files and configured to copy the selected archive into the app.
+private struct ZipDocumentPicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let onPick: (URL) -> Void
+    let onError: (Error) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented, onPick: onPick, onError: onError)
+    }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let controller = UIViewController()
+        controller.view.backgroundColor = .clear
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIViewController, context: Context) {
+        guard isPresented, !context.coordinator.isPickerPresented else { return }
+        DispatchQueue.main.async {
+            guard self.isPresented, !context.coordinator.isPickerPresented else { return }
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.zip], asCopy: true)
+            picker.allowsMultipleSelection = false
+            picker.delegate = context.coordinator
+            context.coordinator.isPickerPresented = true
+            controller.present(picker, animated: true)
+        }
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        @Binding private var isPresented: Bool
+        private let onPick: (URL) -> Void
+        private let onError: (Error) -> Void
+        var isPickerPresented = false
+
+        init(isPresented: Binding<Bool>, onPick: @escaping (URL) -> Void, onError: @escaping (Error) -> Void) {
+            _isPresented = isPresented
+            self.onPick = onPick
+            self.onError = onError
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            isPickerPresented = false
+            isPresented = false
+            guard let url = urls.first else { return }
+            onPick(url)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            isPickerPresented = false
+            isPresented = false
+        }
     }
 }
