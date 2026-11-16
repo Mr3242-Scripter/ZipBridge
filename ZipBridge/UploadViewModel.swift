@@ -81,8 +81,6 @@ final class UploadViewModel: ObservableObject {
     let maximumGitHubFileSize: Int64 = 100 * 1024 * 1024
     /// Target batch size when Fast Mode is on (just under 25 MiB).
     let fastModeBatchTarget: Int64 = 24 * 1024 * 1024
-    /// Concurrent requests inside one Fast Mode batch.
-    let fastModeConcurrency = 6
 
     var client: GitHubClient? {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -180,7 +178,6 @@ final class UploadViewModel: ObservableObject {
         var currentSize: Int64 = 0
 
         for file in files {
-            // Single file larger than target still goes alone (may still be under 100 MiB GitHub limit).
             if file.byteCount >= targetBytes {
                 if !current.isEmpty {
                     batches.append(current)
@@ -220,7 +217,7 @@ final class UploadViewModel: ObservableObject {
         let eligible = archive.files.filter { !uploadedPaths.contains($0.relativePath) }
 
         if fastMode {
-            append("Fast Mode on — batching uploads near 25 MiB and verifying in parallel.")
+            append("Fast Mode on — each ~25 MiB batch uploads fully in parallel, then verifies in parallel.")
             await uploadFast(eligible, client: client, owner: owner, repo: repo, branch: selectedBranch.name)
         } else {
             await uploadSequential(eligible, client: client, owner: owner, repo: repo, branch: selectedBranch.name)
@@ -269,6 +266,7 @@ final class UploadViewModel: ObservableObject {
         }
     }
 
+    /// Uploads every file in a ~25 MiB batch at the same time (no fixed concurrency cap).
     private func uploadFast(
         _ eligible: [ArchiveFile],
         client: GitHubClient,
@@ -282,39 +280,30 @@ final class UploadViewModel: ObservableObject {
 
         for (batchIndex, batch) in batches.enumerated() {
             let batchBytes = batch.reduce(Int64(0)) { $0 + $1.byteCount }
-            currentAction = "Fast upload batch \(batchIndex + 1)/\(batches.count) (\(batch.count) files, \(ByteCountFormatter.string(fromByteCount: batchBytes, countStyle: .file)))"
+            currentAction = "Fast upload batch \(batchIndex + 1)/\(batches.count) (\(batch.count) files in parallel, \(ByteCountFormatter.string(fromByteCount: batchBytes, countStyle: .file)))"
 
             var shouldStop = false
 
             await withTaskGroup(of: (String, Result<Void, Error>).self) { group in
-                var inFlight = 0
-                var iterator = batch.makeIterator()
-
-                func enqueueNext() {
-                    while inFlight < fastModeConcurrency, let file = iterator.next() {
-                        if file.byteCount > maximumGitHubFileSize {
-                            failedPaths[file.relativePath] = "Exceeds GitHub's 100 MiB Contents API file limit."
-                            append("Skipped \(file.relativePath): file exceeds 100 MiB.")
-                            finishedThisRun += 1
-                            progress = Double(finishedThisRun) / Double(total)
-                            continue
-                        }
-                        inFlight += 1
-                        group.addTask {
-                            do {
-                                try await self.uploadOne(file, client: client, owner: owner, repo: repo, branch: branch)
-                                return (file.relativePath, .success(()))
-                            } catch {
-                                return (file.relativePath, .failure(error))
-                            }
+                for file in batch {
+                    if file.byteCount > maximumGitHubFileSize {
+                        failedPaths[file.relativePath] = "Exceeds GitHub's 100 MiB Contents API file limit."
+                        append("Skipped \(file.relativePath): file exceeds 100 MiB.")
+                        finishedThisRun += 1
+                        progress = Double(finishedThisRun) / Double(total)
+                        continue
+                    }
+                    group.addTask {
+                        do {
+                            try await self.uploadOne(file, client: client, owner: owner, repo: repo, branch: branch)
+                            return (file.relativePath, .success(()))
+                        } catch {
+                            return (file.relativePath, .failure(error))
                         }
                     }
                 }
 
-                enqueueNext()
-
                 for await (path, result) in group {
-                    inFlight -= 1
                     switch result {
                     case .success:
                         uploadedPaths.insert(path)
@@ -327,9 +316,6 @@ final class UploadViewModel: ObservableObject {
                     }
                     finishedThisRun += 1
                     progress = Double(finishedThisRun) / Double(total)
-                    if !shouldStop {
-                        enqueueNext()
-                    }
                 }
             }
 
@@ -436,6 +422,7 @@ final class UploadViewModel: ObservableObject {
         }
     }
 
+    /// Verifies every file in a ~25 MiB batch at the same time.
     private func verifyFast(
         _ files: [ArchiveFile],
         remote: [String: Int],
@@ -448,39 +435,29 @@ final class UploadViewModel: ObservableObject {
 
         for (batchIndex, batch) in batches.enumerated() {
             let batchBytes = batch.reduce(Int64(0)) { $0 + $1.byteCount }
-            currentAction = "Fast verify batch \(batchIndex + 1)/\(batches.count) (\(batch.count) files, \(ByteCountFormatter.string(fromByteCount: batchBytes, countStyle: .file)))"
+            currentAction = "Fast verify batch \(batchIndex + 1)/\(batches.count) (\(batch.count) files in parallel, \(ByteCountFormatter.string(fromByteCount: batchBytes, countStyle: .file)))"
 
             await withTaskGroup(of: (String, VerificationIssue?).self) { group in
-                var inFlight = 0
-                var iterator = batch.makeIterator()
-
-                func enqueueNext() {
-                    while inFlight < fastModeConcurrency, let file = iterator.next() {
-                        inFlight += 1
-                        group.addTask {
-                            let issue = await self.verifyOne(
-                                file,
-                                remote: remote,
-                                client: client,
-                                owner: owner,
-                                repo: repo,
-                                branch: branch
-                            )
-                            return (file.relativePath, issue)
-                        }
+                for file in batch {
+                    group.addTask {
+                        let issue = await self.verifyOne(
+                            file,
+                            remote: remote,
+                            client: client,
+                            owner: owner,
+                            repo: repo,
+                            branch: branch
+                        )
+                        return (file.relativePath, issue)
                     }
                 }
 
-                enqueueNext()
-
                 for await (_, issue) in group {
-                    inFlight -= 1
                     if let issue {
                         verificationIssues.append(issue)
                     } else {
                         verifiedCount += 1
                     }
-                    enqueueNext()
                 }
             }
         }
