@@ -71,10 +71,13 @@ jobs:
             /usr/bin/zip -qry "$GITHUB_WORKSPACE/release/$IPA_NAME" Payload
           )
           test -s "release/$IPA_NAME"
-          shasum -a 256 "release/$IPA_NAME" | tee release/SHA256SUMS.txt
+
+          # Keep a stable asset name so clients do not need a timestamped URL.
+          cp "release/$IPA_NAME" "release/ZipBridge.ipa"
+          shasum -a 256 release/ZipBridge.ipa "release/$IPA_NAME" | tee release/SHA256SUMS.txt
           echo "IPA_NAME=$IPA_NAME" >> "$GITHUB_ENV"
 
-      - name: Detect or create today's release
+      - name: Detect or create today's latest release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -95,7 +98,6 @@ jobs:
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "ZipBridge Build $RELEASE_TAG" \
-              --prerelease \
               --target "$GITHUB_SHA" \
               --notes "Manually triggered unsigned iOS build of ZipBridge from main.
 
@@ -106,17 +108,24 @@ jobs:
           This IPA must be signed before it can be installed on a standard iPhone."
           fi
 
+          RELEASE_ID="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq '.databaseId')"
+          # Promote this release so GitHub's /releases/latest/download URL resolves.
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F prerelease=false \
+            -F make_latest=true
+
       - name: Upload IPA and checksum to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$RELEASE_TAG" \
             "release/$IPA_NAME" \
+            release/ZipBridge.ipa \
             release/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
 
-      - name: Verify release contains the IPA
+      - name: Verify release contains stable and versioned IPA assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -125,4 +134,5 @@ jobs:
             --json assets \
             --jq '.assets[].name' | tee "$RUNNER_TEMP/release-assets.txt"
           grep -Fx "$IPA_NAME" "$RUNNER_TEMP/release-assets.txt"
+          grep -Fx "ZipBridge.ipa" "$RUNNER_TEMP/release-assets.txt"
           grep -Fx "SHA256SUMS.txt" "$RUNNER_TEMP/release-assets.txt"
