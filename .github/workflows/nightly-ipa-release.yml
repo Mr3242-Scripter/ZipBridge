@@ -114,6 +114,24 @@ jobs:
             -F prerelease=false \
             -F make_latest=true
 
+      - name: Remove every existing release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Start with a clean release so stale timestamped IPAs cannot accumulate.
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name' > "$RUNNER_TEMP/old-release-assets.txt"
+
+          while IFS= read -r asset_name; do
+            [ -n "$asset_name" ] || continue
+            echo "Deleting old release asset: $asset_name"
+            gh release delete-asset "$RELEASE_TAG" "$asset_name" \
+              --repo "$GITHUB_REPOSITORY" \
+              --yes
+          done < "$RUNNER_TEMP/old-release-assets.txt"
+
       - name: Upload IPA and checksum to release
         env:
           GH_TOKEN: ${{ github.token }}
