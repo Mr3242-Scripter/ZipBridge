@@ -273,8 +273,8 @@ struct ContentView: View {
     private var activityCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("Activity", icon: "text.alignleft")
-            ForEach(Array(model.logs.suffix(12).enumerated()), id: \.offset) { item in
-                Text(item.element).font(.caption).foregroundColor(.secondary)
+            ForEach(Array(model.logs.suffix(12)), id: \.self) { line in
+                Text(line).font(.caption).foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
