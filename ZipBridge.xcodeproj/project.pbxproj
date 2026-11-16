@@ -1,0 +1,35 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1; classes = {}; objectVersion = 56;
+ objects = {
+ P00000000000000000000001 = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1500; TargetAttributes = {T00000000000000000000001 = {CreatedOnToolsVersion = 15.0; }; }; }; buildConfigurationList = C00000000000000000000002; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, ); mainGroup = G00000000000000000000001; productRefGroup = G00000000000000000000002; projectDirPath = ""; projectRoot = ""; targets = (T00000000000000000000001, ); packageReferences = (R00000000000000000000001, ); };
+ T00000000000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = C00000000000000000000001; buildPhases = (S00000000000000000000001, F00000000000000000000001, ); buildRules = (); dependencies = (); name = ZipBridge; packageProductDependencies = (D00000000000000000000001, ); productName = ZipBridge; productReference = F00000000000000000000009; productType = "com.apple.product-type.application"; };
+ G00000000000000000000001 = {isa = PBXGroup; children = (G00000000000000000000003, G00000000000000000000002, ); sourceTree = "<group>"; };
+ G00000000000000000000002 = {isa = PBXGroup; children = (F00000000000000000000009, ); name = Products; sourceTree = "<group>"; };
+ G00000000000000000000003 = {isa = PBXGroup; children = (F00000000000000000000003, F00000000000000000000004, F00000000000000000000005, F00000000000000000000006, F00000000000000000000007, F00000000000000000000008, ); path = ZipBridge; sourceTree = "<group>"; };
+ F00000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipBridgeApp.swift; sourceTree = "<group>"; };
+ F00000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+ F00000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubClient.swift; sourceTree = "<group>"; };
+ F00000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveService.swift; sourceTree = "<group>"; };
+ F00000000000000000000007 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadViewModel.swift; sourceTree = "<group>"; };
+ F00000000000000000000008 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+ F00000000000000000000009 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ZipBridge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+ S00000000000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000004, B00000000000000000000005, ); runOnlyForDeploymentPostprocessing = 0; };
+ B00000000000000000000001 = {isa = PBXBuildFile; fileRef = F00000000000000000000003; };
+ B00000000000000000000002 = {isa = PBXBuildFile; fileRef = F00000000000000000000004; };
+ B00000000000000000000003 = {isa = PBXBuildFile; fileRef = F00000000000000000000005; };
+ B00000000000000000000004 = {isa = PBXBuildFile; fileRef = F00000000000000000000006; };
+ B00000000000000000000005 = {isa = PBXBuildFile; fileRef = F00000000000000000000007; };
+ F00000000000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000006, ); runOnlyForDeploymentPostprocessing = 0; };
+ B00000000000000000000006 = {isa = PBXBuildFile; productRef = D00000000000000000000001; };
+ C00000000000000000000001 = {isa = XCConfigurationList; buildConfigurations = (X00000000000000000000001, X00000000000000000000002, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+ C00000000000000000000002 = {isa = XCConfigurationList; buildConfigurations = (X00000000000000000000003, X00000000000000000000004, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+ X00000000000000000000001 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = com.mr3242.ZipBridge; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 16.0; TARGETED_DEVICE_FAMILY = "1,2"; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = ZipBridge/Info.plist; }; name = Debug; };
+ X00000000000000000000002 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = com.mr3242.ZipBridge; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 16.0; TARGETED_DEVICE_FAMILY = "1,2"; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = ZipBridge/Info.plist; SWIFT_COMPILATION_MODE = wholemodule; }; name = Release; };
+ X00000000000000000000003 = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 16.0; }; name = Debug; };
+ X00000000000000000000004 = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 16.0; }; name = Release; };
+ R00000000000000000000001 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/weichsel/ZIPFoundation.git"; requirement = {kind = upToNextMajorVersion; minimumVersion = 0.9.19; }; };
+ D00000000000000000000001 = {isa = XCSwiftPackageProductDependency; package = R00000000000000000000001; productName = ZIPFoundation; };
+ };
+ rootObject = P00000000000000000000001;
+}
