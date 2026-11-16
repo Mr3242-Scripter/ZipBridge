@@ -61,11 +61,16 @@ enum ArchiveService {
                       !raw.contains("\0") else {
                     throw ArchiveServiceError.unsafeEntry(raw)
                 }
-                let components = raw.split(separator: "/", omittingEmptySubsequences: true)
-                guard !components.isEmpty,
-                      !components.contains(".."),
-                      !components.contains("."),
-                      !components[0].contains(":") else {
+                // Ignore harmless current-directory components (for example "./folder/file").
+                // Parent traversal remains forbidden; all output is confined to the fresh extraction root.
+                let rawComponents = raw.split(separator: "/", omittingEmptySubsequences: true)
+                guard !rawComponents.isEmpty,
+                      !rawComponents.contains(".."),
+                      !rawComponents[0].contains(":") else {
+                    throw ArchiveServiceError.unsafeEntry(raw)
+                }
+                let components = rawComponents.filter { $0 != "." }
+                guard !components.isEmpty else {
                     throw ArchiveServiceError.unsafeEntry(raw)
                 }
                 guard entry.type != .symlink else {
