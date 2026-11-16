@@ -187,7 +187,11 @@ struct ContentView: View {
             Button {
                 showingImporter = true
             } label: {
-                Label {
+                HStack(spacing: 12) {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(.blue)
+                        .font(.title3)
+
                     VStack(alignment: .leading, spacing: 2) {
                         Text(model.archive?.sourceName ?? "Choose ZIP File")
                             .foregroundStyle(.primary)
@@ -197,9 +201,8 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                } icon: {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(.blue)
+
+                    Spacer(minLength: 0)
                 }
             }
 
@@ -215,15 +218,23 @@ struct ContentView: View {
             }
 
             if !archiveProtectionEnabled {
-                Label("Every protection is off, including path confinement. Use only with fully trusted archives.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    Text("Every protection is off, including path confinement. Use only with fully trusted archives.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
 
             if model.archiveSizeWarning {
-                Label("Archive exceeds the 25 MiB advisory threshold.", systemImage: "info.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Archive exceeds the 25 MiB advisory threshold.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
         } header: {
             Text("Archive")
