@@ -115,17 +115,139 @@ final class GitHubClient {
         }
     }
 
+    /// Single-file upload via Contents API, with retries on conflict (409/400).
     func upload(data: Data, owner: String, repo: String, path: String, branch: String, message: String) async throws {
-        let sha = try await existingSHA(owner: owner, repo: repo, path: path, branch: branch)
-        var payload: [String: Any] = [
-            "message": message,
-            "content": data.base64EncodedString(),
-            "branch": branch
+        var lastError: Error?
+        for attempt in 1...4 {
+            do {
+                let sha = try await existingSHA(owner: owner, repo: repo, path: path, branch: branch)
+                var payload: [String: Any] = [
+                    "message": message,
+                    "content": data.base64EncodedString(),
+                    "branch": branch
+                ]
+                if let sha { payload["sha"] = sha }
+                let body = try JSONSerialization.data(withJSONObject: payload)
+                let route = "/repos/\(pathComponent(owner))/\(pathComponent(repo))/contents/\(encodedPath(path))"
+                _ = try await request(path: route, method: "PUT", body: body)
+                return
+            } catch GitHubClientError.http(let code, let message) where code == 409 || code == 400 || code == 422 {
+                lastError = GitHubClientError.http(code, message)
+                if attempt < 4 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt) * 250_000_000)
+                    continue
+                }
+            } catch {
+                throw error
+            }
+        }
+        if let lastError { throw lastError }
+    }
+
+    // MARK: - Git Data API (true multi-file commit for Fast Mode)
+
+    private struct BlobResponse: Decodable { let sha: String }
+    private struct TreeResponse: Decodable { let sha: String }
+    private struct CommitResponse: Decodable { let sha: String }
+    private struct RefResponse: Decodable {
+        struct Object: Decodable { let sha: String }
+        let object: Object
+    }
+
+    /// Creates one commit containing all provided files (parallel blob upload).
+    func uploadBatch(
+        files: [(path: String, data: Data)],
+        owner: String,
+        repo: String,
+        branch: String,
+        message: String
+    ) async throws {
+        guard !files.isEmpty else { return }
+
+        let o = pathComponent(owner)
+        let r = pathComponent(repo)
+        let refName = pathComponent(branch)
+
+        // 1. Current branch tip
+        let refData = try await request(path: "/repos/\(o)/\(r)/git/ref/heads/\(refName)")
+        let headSHA = try decoder.decode(RefResponse.self, from: refData).object.sha
+
+        // 2. Create blobs in parallel
+        var blobSHAs: [(path: String, sha: String)] = []
+        try await withThrowingTaskGroup(of: (String, String).self) { group in
+            for file in files {
+                group.addTask {
+                    let payload: [String: Any] = [
+                        "content": file.data.base64EncodedString(),
+                        "encoding": "base64"
+                    ]
+                    let body = try JSONSerialization.data(withJSONObject: payload)
+                    let data = try await self.request(
+                        path: "/repos/\(o)/\(r)/git/blobs",
+                        method: "POST",
+                        body: body
+                    )
+                    let sha = try self.decoder.decode(BlobResponse.self, from: data).sha
+                    return (file.path, sha)
+                }
+            }
+            for try await item in group {
+                blobSHAs.append(item)
+            }
+        }
+
+        // 3. Create tree from base + new blobs
+        let treeItems: [[String: Any]] = blobSHAs.map { entry in
+            [
+                "path": entry.path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": entry.sha
+            ]
+        }
+        let treePayload: [String: Any] = [
+            "base_tree": headSHA,
+            "tree": treeItems
         ]
-        if let sha { payload["sha"] = sha }
-        let body = try JSONSerialization.data(withJSONObject: payload)
-        let route = "/repos/\(pathComponent(owner))/\(pathComponent(repo))/contents/\(encodedPath(path))"
-        _ = try await request(path: route, method: "PUT", body: body)
+        let treeBody = try JSONSerialization.data(withJSONObject: treePayload)
+        let treeData = try await request(path: "/repos/\(o)/\(r)/git/trees", method: "POST", body: treeBody)
+        let treeSHA = try decoder.decode(TreeResponse.self, from: treeData).sha
+
+        // 4. Create commit
+        let commitPayload: [String: Any] = [
+            "message": message,
+            "tree": treeSHA,
+            "parents": [headSHA]
+        ]
+        let commitBody = try JSONSerialization.data(withJSONObject: commitPayload)
+        let commitData = try await request(path: "/repos/\(o)/\(r)/git/commits", method: "POST", body: commitBody)
+        let commitSHA = try decoder.decode(CommitResponse.self, from: commitData).sha
+
+        // 5. Move branch ref (retry once on conflict)
+        let refPayload: [String: Any] = ["sha": commitSHA, "force": false]
+        let refBody = try JSONSerialization.data(withJSONObject: refPayload)
+        do {
+            _ = try await request(path: "/repos/\(o)/\(r)/git/refs/heads/\(refName)", method: "PATCH", body: refBody)
+        } catch GitHubClientError.http(let code, _) where code == 422 || code == 409 || code == 400 {
+            // Branch moved — retry once from fresh tip
+            let refData2 = try await request(path: "/repos/\(o)/\(r)/git/ref/heads/\(refName)")
+            let head2 = try decoder.decode(RefResponse.self, from: refData2).object.sha
+            let treePayload2: [String: Any] = ["base_tree": head2, "tree": treeItems]
+            let treeBody2 = try JSONSerialization.data(withJSONObject: treePayload2)
+            let treeData2 = try await request(path: "/repos/\(o)/\(r)/git/trees", method: "POST", body: treeBody2)
+            let treeSHA2 = try decoder.decode(TreeResponse.self, from: treeData2).sha
+            let commitPayload2: [String: Any] = [
+                "message": message,
+                "tree": treeSHA2,
+                "parents": [head2]
+            ]
+            let commitBody2 = try JSONSerialization.data(withJSONObject: commitPayload2)
+            let commitData2 = try await request(path: "/repos/\(o)/\(r)/git/commits", method: "POST", body: commitBody2)
+            let commitSHA2 = try decoder.decode(CommitResponse.self, from: commitData2).sha
+            let refPayload2: [String: Any] = ["sha": commitSHA2, "force": false]
+            let refBody2 = try JSONSerialization.data(withJSONObject: refPayload2)
+            _ = try await request(path: "/repos/\(o)/\(r)/git/refs/heads/\(refName)", method: "PATCH", body: refBody2)
+        }
     }
 
     func remoteTree(owner: String, repo: String, branch: String) async throws -> GitTreeResponse {
