@@ -43,7 +43,7 @@ jobs:
           xcodebuild \
             -project ZipBridge.xcodeproj \
             -scheme ZipBridge \
-            -configuration Release \
+            -configuration Debug \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
@@ -55,7 +55,7 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/ZipBridge.app"
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphoneos/ZipBridge.app"
           test -d "$APP_PATH"
           mkdir -p "$RUNNER_TEMP/ipa/Payload" release
           ditto "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/ZipBridge.app"
