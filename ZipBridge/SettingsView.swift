@@ -24,12 +24,17 @@ struct SettingsView: View {
                     }
 
                     if !archiveProtectionEnabled {
-                        Label("Every protection is off, including path confinement. Use only with fully trusted archives.", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.red)
+                        Label(
+                            "Every protection is off, including path confinement. Use only with fully trusted archives.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundColor(.red)
                     }
                 } header: {
                     Text("Archive Safety")
+                } footer: {
+                    Text("When protection is on, ZipBridge rejects path traversal, symlinks, and oversized expansions.")
                 }
 
                 Section {
@@ -37,7 +42,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Enable Fast Mode")
                             Text(fastModeEnabled
-                                  ? "Full ~25 MiB batches in parallel"
+                                  ? "Batches under 25 MB, all files in parallel"
                                   : "One file at a time")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -46,14 +51,14 @@ struct SettingsView: View {
                 } header: {
                     Text("Upload Speed")
                 } footer: {
-                    Text("Fast Mode groups files near 25 MiB and uploads or verifies every file in that batch at once.")
+                    Text("Fast Mode packs files into batches that never exceed 25 MB, then uploads and verifies every file in the batch together.")
                 }
 
                 Section {
                     Toggle(isOn: $backgroundAudioEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Background Silent Audio")
-                            Text("Play near-silent audio so uploads can continue in the background")
+                            Text("Silent Audio")
+                            Text("Near-silent playback keeps the app alive in the background")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -61,8 +66,8 @@ struct SettingsView: View {
 
                     Toggle(isOn: $backgroundLocationEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Background Location Ping")
-                            Text("Request location every 5 seconds while uploading")
+                            Text("Location Ping")
+                            Text("Refresh location every 5 seconds while uploading")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -70,16 +75,18 @@ struct SettingsView: View {
                 } header: {
                     Text("Background Upload")
                 } footer: {
-                    Text("These keep the app active when you leave it during a long upload. Location requires permission. Use only while you need background transfers.")
+                    Text("Only active during an upload. Location needs permission. Prefer Silent Audio when possible.")
                 }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
                 }
             }
         }
+        .tint(.blue)
     }
 }
