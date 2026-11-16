@@ -1,9 +1,6 @@
 name: Nightly IPA Release
 
 on:
-  schedule:
-    # GitHub Actions cron uses UTC: 03:00 every night.
-    - cron: "0 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +12,7 @@ concurrency:
 
 jobs:
   build-and-release:
-    name: Build unsigned IPA and publish nightly release
+    name: Build unsigned IPA and publish release
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -60,7 +57,6 @@ jobs:
         run: |
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/ZipBridge.app"
           test -d "$APP_PATH"
-
           mkdir -p "$RUNNER_TEMP/ipa/Payload" release
           ditto "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/ZipBridge.app"
 
@@ -74,21 +70,20 @@ jobs:
             cd "$RUNNER_TEMP/ipa"
             /usr/bin/zip -qry "$GITHUB_WORKSPACE/release/$IPA_NAME" Payload
           )
-
           test -s "release/$IPA_NAME"
           shasum -a 256 "release/$IPA_NAME" | tee release/SHA256SUMS.txt
           echo "IPA_NAME=$IPA_NAME" >> "$GITHUB_ENV"
 
-      - name: Detect or create today's nightly release
+      - name: Detect or create today's release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Found existing nightly release: $RELEASE_TAG"
+            echo "Found existing release: $RELEASE_TAG"
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "ZipBridge Nightly $RELEASE_TAG" \
-              --notes "Automated unsigned iOS build of ZipBridge from main.
+              --title "ZipBridge Build $RELEASE_TAG" \
+              --notes "Manually triggered unsigned iOS build of ZipBridge from main.
 
           Latest build: $BUILD_NUMBER
           Signing: None (unsigned IPA)
@@ -99,10 +94,10 @@ jobs:
             echo "No release found for $RELEASE_TAG; creating it."
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "ZipBridge Nightly $RELEASE_TAG" \
+              --title "ZipBridge Build $RELEASE_TAG" \
               --prerelease \
               --target "$GITHUB_SHA" \
-              --notes "Automated unsigned iOS build of ZipBridge from main.
+              --notes "Manually triggered unsigned iOS build of ZipBridge from main.
 
           Build: $BUILD_NUMBER
           Signing: None (unsigned IPA)
@@ -111,7 +106,7 @@ jobs:
           This IPA must be signed before it can be installed on a standard iPhone."
           fi
 
-      - name: Upload IPA and checksum to nightly release
+      - name: Upload IPA and checksum to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
