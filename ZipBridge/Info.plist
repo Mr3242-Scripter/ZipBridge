@@ -14,5 +14,16 @@
     <key>UILaunchScreen</key><dict/>
     <key>UISupportedInterfaceOrientations</key>
     <array><string>UIInterfaceOrientationPortrait</string></array>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+        <string>location</string>
+    </array>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>ZipBridge can use occasional location updates to keep long uploads running while the app is in the background.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>ZipBridge can use occasional location updates to keep long uploads running while the app is in the background.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>ZipBridge can use occasional location updates to keep long uploads running while the app is in the background.</string>
 </dict>
 </plist>
