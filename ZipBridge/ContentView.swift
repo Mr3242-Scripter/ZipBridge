@@ -5,8 +5,11 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var model = UploadViewModel()
     @State private var showingImporter = false
+    @State private var showingSettings = false
     @AppStorage("archiveProtectionEnabled") private var archiveProtectionEnabled = true
     @AppStorage("fastModeEnabled") private var fastModeEnabled = false
+    @AppStorage("backgroundAudioEnabled") private var backgroundAudioEnabled = false
+    @AppStorage("backgroundLocationEnabled") private var backgroundLocationEnabled = false
 
     private var success: Bool {
         model.verificationFinished &&
@@ -24,6 +27,9 @@ struct ContentView: View {
         }
         .tint(.blue)
         .background { documentPickerBackground }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
+        }
         .alert(
             "Unable to Continue",
             isPresented: Binding(
@@ -43,8 +49,6 @@ struct ContentView: View {
             }
         }
     }
-
-    // MARK: - Form
 
     private var formContent: some View {
         Form {
@@ -67,8 +71,6 @@ struct ContentView: View {
             }
         }
     }
-
-    // MARK: - Sections
 
     private var headerSection: some View {
         Section {
@@ -205,34 +207,6 @@ struct ContentView: View {
                 }
             }
 
-            Toggle(isOn: $archiveProtectionEnabled) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Enable Protection")
-                    Text(archiveProtectionEnabled
-                          ? "2 GiB limit + strict path safety"
-                          : "All protections disabled")
-                        .font(.caption)
-                        .foregroundColor(archiveProtectionEnabled ? .secondary : .red)
-                }
-            }
-
-            if !archiveProtectionEnabled {
-                Label("Every protection is off, including path confinement. Use only with fully trusted archives.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundColor(.red)
-            }
-
-            Toggle(isOn: $fastModeEnabled) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Enable Fast Mode")
-                    Text(fastModeEnabled
-                          ? "Full ~25 MiB batches in parallel"
-                          : "One file at a time")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-
             if model.archiveSizeWarning {
                 Label("Archive exceeds the 25 MiB advisory threshold.", systemImage: "info.circle.fill")
                     .font(.caption)
@@ -240,6 +214,8 @@ struct ContentView: View {
             }
         } header: {
             Text("Archive")
+        } footer: {
+            Text("Protection, Fast Mode, and background options are in Settings.")
         }
     }
 
@@ -259,28 +235,33 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            Button {
-                Task { await model.uploadAndVerify(fastMode: fastModeEnabled) }
-            } label: {
-                if model.isBusy {
-                    HStack {
-                        ProgressView()
-                        Text("Working…")
-                    }
-                } else {
+            if model.isBusy {
+                Button(role: .destructive) {
+                    model.cancelUpload()
+                } label: {
+                    Label("Cancel Upload", systemImage: "xmark.circle.fill")
+                }
+            } else {
+                Button {
+                    model.startUploadAndVerify(
+                        fastMode: fastModeEnabled,
+                        backgroundAudio: backgroundAudioEnabled,
+                        backgroundLocation: backgroundLocationEnabled
+                    )
+                } label: {
                     Label(
                         model.uploadedPaths.isEmpty ? "Upload Files & Verify" : "Continue / Retry & Verify",
                         systemImage: "arrow.up.to.line"
                     )
                 }
+                .disabled(model.selectedRepository == nil || model.selectedBranch == nil || model.token.isEmpty)
             }
-            .disabled(model.isBusy || model.selectedRepository == nil || model.selectedBranch == nil || model.token.isEmpty)
         } header: {
             Text("Upload")
         } footer: {
             Text(fastModeEnabled
-                  ? "Fast Mode groups files near 25 MiB and uploads/verifies every file in that batch at once. Files over 100 MiB are still skipped."
-                  : "Each file is committed separately. Files over 100 MiB are skipped by GitHub’s Contents API.")
+                  ? "Fast Mode is on. Background keep-alive follows Settings."
+                  : "One file at a time. Open Settings for Fast Mode and background options.")
         }
     }
 
@@ -359,21 +340,28 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Toolbar & Background
-
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigationBarTrailing) {
-            if model.isBusy {
-                ProgressView()
-            } else {
-                Button {
-                    Task { await model.loadRepositories() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+            HStack(spacing: 16) {
+                if model.isBusy {
+                    ProgressView()
+                } else {
+                    Button {
+                        Task { await model.loadRepositories() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(model.token.isEmpty)
+                    .accessibilityLabel("Refresh repositories")
                 }
-                .disabled(model.token.isEmpty)
-                .accessibilityLabel("Refresh repositories")
+
+                Button {
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                }
+                .accessibilityLabel("Settings")
             }
         }
     }
@@ -387,8 +375,6 @@ struct ContentView: View {
         .frame(width: 0, height: 0)
     }
 
-    // MARK: - Helpers
-
     private func statusIcon(for path: String) -> String {
         if model.uploadedPaths.contains(path) { return "checkmark.circle.fill" }
         if model.failedPaths[path] != nil { return "exclamationmark.circle.fill" }
@@ -401,8 +387,6 @@ struct ContentView: View {
         return .secondary
     }
 }
-
-// MARK: - Document Picker (iOS 16)
 
 private struct ZipDocumentPicker: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
