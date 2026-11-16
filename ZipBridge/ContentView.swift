@@ -185,17 +185,17 @@ struct ContentView: View {
                     Text("Enable protection").font(.subheadline.weight(.semibold))
                     Text(archiveProtectionEnabled
                         ? "2 GiB size limit + strict path safety (recommended)"
-                        : "Size limit and most path checks disabled")
+                        : "ALL protections disabled (including path confinement)")
                         .font(.caption)
-                        .foregroundColor(archiveProtectionEnabled ? .secondary : .orange)
+                        .foregroundColor(archiveProtectionEnabled ? .secondary : .red)
                 }
             }
             .tint(.blue)
 
             if !archiveProtectionEnabled {
-                Label("Protection is off. Only hard sandbox confinement remains. Use only with trusted archives.", systemImage: "exclamationmark.triangle.fill")
+                Label("WARNING: Every protection is off. Path traversal, symlinks, size limits and sandbox confinement are all disabled. Only use with archives you completely trust.", systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
-                    .foregroundColor(.orange)
+                    .foregroundColor(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
