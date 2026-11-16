@@ -79,6 +79,10 @@ final class UploadViewModel: ObservableObject {
 
     let advisoryArchiveThreshold: Int64 = 25 * 1024 * 1024
     let maximumGitHubFileSize: Int64 = 100 * 1024 * 1024
+    /// Target batch size when Fast Mode is on (just under 25 MiB).
+    let fastModeBatchTarget: Int64 = 24 * 1024 * 1024
+    /// Concurrent requests inside one Fast Mode batch.
+    let fastModeConcurrency = 6
 
     var client: GitHubClient? {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -157,7 +161,7 @@ final class UploadViewModel: ObservableObject {
             archiveSizeWarning = extracted.archiveBytes > advisoryArchiveThreshold
             progress = 0
             if archiveSizeWarning {
-                append("Archive exceeds the 25 MiB advisory threshold. Continuing with individual file checks.")
+                append("Archive exceeds the 25 MiB advisory threshold.")
             }
             append("Inspected \(extracted.files.count) files (\(ByteCountFormatter.string(fromByteCount: extracted.archiveBytes, countStyle: .file)) compressed).")
             currentAction = "Ready to upload"
@@ -166,7 +170,42 @@ final class UploadViewModel: ObservableObject {
             currentAction = "Archive inspection failed"
         }
     }
-    func uploadAndVerify() async {
+
+    // MARK: - Batching
+
+    /// Groups files so each batch’s total size stays near (but under) the 25 MiB target.
+    private func makeBatches(from files: [ArchiveFile], targetBytes: Int64) -> [[ArchiveFile]] {
+        var batches: [[ArchiveFile]] = []
+        var current: [ArchiveFile] = []
+        var currentSize: Int64 = 0
+
+        for file in files {
+            // Single file larger than target still goes alone (may still be under 100 MiB GitHub limit).
+            if file.byteCount >= targetBytes {
+                if !current.isEmpty {
+                    batches.append(current)
+                    current = []
+                    currentSize = 0
+                }
+                batches.append([file])
+                continue
+            }
+            if !current.isEmpty && currentSize + file.byteCount > targetBytes {
+                batches.append(current)
+                current = [file]
+                currentSize = file.byteCount
+            } else {
+                current.append(file)
+                currentSize += file.byteCount
+            }
+        }
+        if !current.isEmpty { batches.append(current) }
+        return batches
+    }
+
+    // MARK: - Upload
+
+    func uploadAndVerify(fastMode: Bool = false) async {
         guard let archive, let client, let selectedRepository, let selectedBranch else {
             errorMessage = "Choose a ZIP, repository, branch, and valid token."
             return
@@ -174,12 +213,37 @@ final class UploadViewModel: ObservableObject {
         isBusy = true
         verificationFinished = false
         defer { isBusy = false }
+
         let parts = selectedRepository.full_name.split(separator: "/")
         guard parts.count == 2 else { errorMessage = "Invalid repository name."; return }
         let owner = String(parts[0]), repo = String(parts[1])
         let eligible = archive.files.filter { !uploadedPaths.contains($0.relativePath) }
-        var finishedThisRun = 0
 
+        if fastMode {
+            append("Fast Mode on — batching uploads near 25 MiB and verifying in parallel.")
+            await uploadFast(eligible, client: client, owner: owner, repo: repo, branch: selectedBranch.name)
+        } else {
+            await uploadSequential(eligible, client: client, owner: owner, repo: repo, branch: selectedBranch.name)
+        }
+
+        await verifyArchive(
+            archive,
+            client: client,
+            owner: owner,
+            repo: repo,
+            branch: selectedBranch.name,
+            fastMode: fastMode
+        )
+    }
+
+    private func uploadSequential(
+        _ eligible: [ArchiveFile],
+        client: GitHubClient,
+        owner: String,
+        repo: String,
+        branch: String
+    ) async {
+        var finishedThisRun = 0
         for file in eligible {
             currentAction = "Uploading \(file.relativePath)"
             if file.byteCount > maximumGitHubFileSize {
@@ -190,18 +254,7 @@ final class UploadViewModel: ObservableObject {
                 continue
             }
             do {
-                let data = try Data(contentsOf: file.localURL, options: .mappedIfSafe)
-                guard Int64(data.count) == file.byteCount else {
-                    throw NSError(domain: "ZipBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "Local extracted file size changed unexpectedly."])
-                }
-                try await client.upload(
-                    data: data,
-                    owner: owner,
-                    repo: repo,
-                    path: file.relativePath,
-                    branch: selectedBranch.name,
-                    message: "Upload \(file.relativePath) via ZipBridge"
-                )
+                try await uploadOne(file, client: client, owner: owner, repo: repo, branch: branch)
                 uploadedPaths.insert(file.relativePath)
                 failedPaths.removeValue(forKey: file.relativePath)
                 append("Uploaded \(file.relativePath) — committed.")
@@ -214,48 +267,141 @@ final class UploadViewModel: ObservableObject {
             finishedThisRun += 1
             progress = Double(finishedThisRun) / Double(max(eligible.count, 1))
         }
-        await verifyArchive(archive, client: client, owner: owner, repo: repo, branch: selectedBranch.name)
     }
 
-    func retryFailedUploads() async {
+    private func uploadFast(
+        _ eligible: [ArchiveFile],
+        client: GitHubClient,
+        owner: String,
+        repo: String,
+        branch: String
+    ) async {
+        let batches = makeBatches(from: eligible, targetBytes: fastModeBatchTarget)
+        var finishedThisRun = 0
+        let total = max(eligible.count, 1)
+
+        for (batchIndex, batch) in batches.enumerated() {
+            let batchBytes = batch.reduce(Int64(0)) { $0 + $1.byteCount }
+            currentAction = "Fast upload batch \(batchIndex + 1)/\(batches.count) (\(batch.count) files, \(ByteCountFormatter.string(fromByteCount: batchBytes, countStyle: .file)))"
+
+            var shouldStop = false
+
+            await withTaskGroup(of: (String, Result<Void, Error>).self) { group in
+                var inFlight = 0
+                var iterator = batch.makeIterator()
+
+                func enqueueNext() {
+                    while inFlight < fastModeConcurrency, let file = iterator.next() {
+                        if file.byteCount > maximumGitHubFileSize {
+                            failedPaths[file.relativePath] = "Exceeds GitHub's 100 MiB Contents API file limit."
+                            append("Skipped \(file.relativePath): file exceeds 100 MiB.")
+                            finishedThisRun += 1
+                            progress = Double(finishedThisRun) / Double(total)
+                            continue
+                        }
+                        inFlight += 1
+                        group.addTask {
+                            do {
+                                try await self.uploadOne(file, client: client, owner: owner, repo: repo, branch: branch)
+                                return (file.relativePath, .success(()))
+                            } catch {
+                                return (file.relativePath, .failure(error))
+                            }
+                        }
+                    }
+                }
+
+                enqueueNext()
+
+                for await (path, result) in group {
+                    inFlight -= 1
+                    switch result {
+                    case .success:
+                        uploadedPaths.insert(path)
+                        failedPaths.removeValue(forKey: path)
+                        append("Uploaded \(path) — committed.")
+                    case .failure(let error):
+                        failedPaths[path] = error.localizedDescription
+                        append("Upload failed for \(path): \(error.localizedDescription)")
+                        shouldStop = true
+                    }
+                    finishedThisRun += 1
+                    progress = Double(finishedThisRun) / Double(total)
+                    if !shouldStop {
+                        enqueueNext()
+                    }
+                }
+            }
+
+            if shouldStop {
+                currentAction = "Paused after upload failure"
+                break
+            }
+        }
+    }
+
+    private func uploadOne(
+        _ file: ArchiveFile,
+        client: GitHubClient,
+        owner: String,
+        repo: String,
+        branch: String
+    ) async throws {
+        let data = try Data(contentsOf: file.localURL, options: .mappedIfSafe)
+        guard Int64(data.count) == file.byteCount else {
+            throw NSError(
+                domain: "ZipBridge",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Local extracted file size changed unexpectedly."]
+            )
+        }
+        try await client.upload(
+            data: data,
+            owner: owner,
+            repo: repo,
+            path: file.relativePath,
+            branch: branch,
+            message: "Upload \(file.relativePath) via ZipBridge"
+        )
+    }
+
+    func retryFailedUploads(fastMode: Bool = false) async {
         failedPaths = failedPaths.filter { $0.value.contains("100 MiB") }
-        await uploadAndVerify()
+        await uploadAndVerify(fastMode: fastMode)
     }
 
-    private func verifyArchive(_ archive: ExtractedArchive, client: GitHubClient, owner: String, repo: String, branch: String) async {
+    // MARK: - Verify
+
+    private func verifyArchive(
+        _ archive: ExtractedArchive,
+        client: GitHubClient,
+        owner: String,
+        repo: String,
+        branch: String,
+        fastMode: Bool
+    ) async {
         currentAction = "Checking remote repository…"
         verificationIssues = []
         verifiedCount = 0
         do {
             let tree = try await client.remoteTree(owner: owner, repo: repo, branch: branch)
             guard !tree.truncated else {
-                throw NSError(domain: "ZipBridge", code: 2, userInfo: [NSLocalizedDescriptionKey: "GitHub truncated the repository tree. Full verification cannot be guaranteed."])
+                throw NSError(
+                    domain: "ZipBridge",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "GitHub truncated the repository tree. Full verification cannot be guaranteed."]
+                )
             }
-            let remote = Dictionary(uniqueKeysWithValues: tree.tree.filter { $0.type == "blob" }.map { ($0.path, $0.size ?? -1) })
-            for file in archive.files {
-                currentAction = "Verifying \(file.relativePath)"
-                guard let remoteSize = remote[file.relativePath] else {
-                    verificationIssues.append(VerificationIssue(path: file.relativePath, detail: "Missing from destination repository."))
-                    continue
-                }
-                guard Int64(remoteSize) == file.byteCount else {
-                    verificationIssues.append(VerificationIssue(path: file.relativePath, detail: "Size mismatch: expected \(file.byteCount), found \(remoteSize)."))
-                    continue
-                }
-                do {
-                    let localData = try Data(contentsOf: file.localURL, options: .mappedIfSafe)
-                    let remoteData = try await client.downloadRaw(owner: owner, repo: repo, branch: branch, path: file.relativePath)
-                    let localHash = SHA256.hash(data: localData).map { String(format: "%02x", $0) }.joined()
-                    let remoteHash = SHA256.hash(data: remoteData).map { String(format: "%02x", $0) }.joined()
-                    if localHash == remoteHash && localData.count == remoteData.count {
-                        verifiedCount += 1
-                    } else {
-                        verificationIssues.append(VerificationIssue(path: file.relativePath, detail: "SHA-256 or byte-count mismatch."))
-                    }
-                } catch {
-                    verificationIssues.append(VerificationIssue(path: file.relativePath, detail: "Could not read back file: \(error.localizedDescription)"))
-                }
+            let remote = Dictionary(
+                uniqueKeysWithValues: tree.tree.filter { $0.type == "blob" }.map { ($0.path, $0.size ?? -1) }
+            )
+
+            if fastMode {
+                await verifyFast(archive.files, remote: remote, client: client, owner: owner, repo: repo, branch: branch)
+            } else {
+                await verifySequential(archive.files, remote: remote, client: client, owner: owner, repo: repo, branch: branch)
             }
+
             verificationFinished = true
             if verificationIssues.isEmpty && verifiedCount == archive.files.count {
                 currentAction = "All files verified"
@@ -269,6 +415,108 @@ final class UploadViewModel: ObservableObject {
             currentAction = "Verification failed"
             errorMessage = error.localizedDescription
             append("Verification could not be completed: \(error.localizedDescription)")
+        }
+    }
+
+    private func verifySequential(
+        _ files: [ArchiveFile],
+        remote: [String: Int],
+        client: GitHubClient,
+        owner: String,
+        repo: String,
+        branch: String
+    ) async {
+        for file in files {
+            currentAction = "Verifying \(file.relativePath)"
+            if let issue = await verifyOne(file, remote: remote, client: client, owner: owner, repo: repo, branch: branch) {
+                verificationIssues.append(issue)
+            } else {
+                verifiedCount += 1
+            }
+        }
+    }
+
+    private func verifyFast(
+        _ files: [ArchiveFile],
+        remote: [String: Int],
+        client: GitHubClient,
+        owner: String,
+        repo: String,
+        branch: String
+    ) async {
+        let batches = makeBatches(from: files, targetBytes: fastModeBatchTarget)
+
+        for (batchIndex, batch) in batches.enumerated() {
+            let batchBytes = batch.reduce(Int64(0)) { $0 + $1.byteCount }
+            currentAction = "Fast verify batch \(batchIndex + 1)/\(batches.count) (\(batch.count) files, \(ByteCountFormatter.string(fromByteCount: batchBytes, countStyle: .file)))"
+
+            await withTaskGroup(of: (String, VerificationIssue?).self) { group in
+                var inFlight = 0
+                var iterator = batch.makeIterator()
+
+                func enqueueNext() {
+                    while inFlight < fastModeConcurrency, let file = iterator.next() {
+                        inFlight += 1
+                        group.addTask {
+                            let issue = await self.verifyOne(
+                                file,
+                                remote: remote,
+                                client: client,
+                                owner: owner,
+                                repo: repo,
+                                branch: branch
+                            )
+                            return (file.relativePath, issue)
+                        }
+                    }
+                }
+
+                enqueueNext()
+
+                for await (_, issue) in group {
+                    inFlight -= 1
+                    if let issue {
+                        verificationIssues.append(issue)
+                    } else {
+                        verifiedCount += 1
+                    }
+                    enqueueNext()
+                }
+            }
+        }
+    }
+
+    private func verifyOne(
+        _ file: ArchiveFile,
+        remote: [String: Int],
+        client: GitHubClient,
+        owner: String,
+        repo: String,
+        branch: String
+    ) async -> VerificationIssue? {
+        guard let remoteSize = remote[file.relativePath] else {
+            return VerificationIssue(path: file.relativePath, detail: "Missing from destination repository.")
+        }
+        guard Int64(remoteSize) == file.byteCount else {
+            return VerificationIssue(
+                path: file.relativePath,
+                detail: "Size mismatch: expected \(file.byteCount), found \(remoteSize)."
+            )
+        }
+        do {
+            let localData = try Data(contentsOf: file.localURL, options: .mappedIfSafe)
+            let remoteData = try await client.downloadRaw(owner: owner, repo: repo, branch: branch, path: file.relativePath)
+            let localHash = SHA256.hash(data: localData).map { String(format: "%02x", $0) }.joined()
+            let remoteHash = SHA256.hash(data: remoteData).map { String(format: "%02x", $0) }.joined()
+            if localHash == remoteHash && localData.count == remoteData.count {
+                return nil
+            }
+            return VerificationIssue(path: file.relativePath, detail: "SHA-256 or byte-count mismatch.")
+        } catch {
+            return VerificationIssue(
+                path: file.relativePath,
+                detail: "Could not read back file: \(error.localizedDescription)"
+            )
         }
     }
 
